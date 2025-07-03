@@ -6,11 +6,11 @@ from datetime import datetime
 from calendar import monthrange
 import requests
 import time
+from pytz import timezone
 from twilio.rest import Client
-import json
-import io
 
 # --- CONFIGURACIÓN ---
+GOOGLE_CRED = "credenciales.json"
 SHEET_NAME = "verificacion_fechas"
 
 # Twilio
@@ -38,55 +38,24 @@ abreviaturas = {
     9: ('Setiembre', 'se'), 10: ('Octubre', 'oc'), 11: ('Noviembre', 'no'), 12: ('Diciembre', 'di')
 }
 
-# Google Service Account JSON incrustado
-GOOGLE_CRED_JSON = {
-    "type": "service_account",
-    "project_id": "tu-proyecto-id",
-    "private_key_id": "tu-private-key-id",
-    "private_key": "-----BEGIN PRIVATE KEY-----\\nMIIBV...\\n...restodelaclave...\\n-----END PRIVATE KEY-----\\n",
-    "client_email": "tu-email@proyecto.iam.gserviceaccount.com",
-    "client_id": "tu-client-id",
-    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-    "token_uri": "https://oauth2.googleapis.com/token",
-    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-    "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/tu-email%40proyecto.iam.gserviceaccount.com"
-}
-
-# Estado actual para la web
-estado_actual = {
-    "ultima_revision": "No se ha hecho ninguna revisión aún",
-    "fechas": {}
-}
-
-# --- SERVIDOR FLASK PARA CONSULTA ---
+# --- SERVIDOR FLASK PARA RENDER ---
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    respuesta = f"✅ SBS Watcher activo\n"
-    respuesta += f"🔍 Última revisión: {estado_actual['ultima_revision']}\n"
-    respuesta += "📅 Fechas actuales:\n"
-    for entidad, fecha in estado_actual['fechas'].items():
-        respuesta += f"- {entidad}: {fecha}\n"
-    return "<pre>" + respuesta + "</pre>"
+    return "✅ SBS Watcher activo en Render"
 
 def run_web():
     app.run(host="0.0.0.0", port=8080)
 
+Thread(target=run_web).start()
+
 # --- GOOGLE SHEETS ---
 def conectar_google_sheet():
-    try:
-        cred_file = io.StringIO(json.dumps(GOOGLE_CRED_JSON))
-        creds = ServiceAccountCredentials.from_json_keyfile_name(cred_file, [
-            "https://spreadsheets.google.com/feeds",
-            "https://www.googleapis.com/auth/drive"
-        ])
-        client = gspread.authorize(creds)
-        print("✅ Conexión exitosa a Google Sheets")
-        return client.open(SHEET_NAME).sheet1
-    except Exception as e:
-        print(f"❌ Error al conectar con Google Sheets: {e}")
-        raise
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_name(GOOGLE_CRED, scope)
+    client = gspread.authorize(creds)
+    return client.open(SHEET_NAME).sheet1
 
 def leer_fechas_anteriores(sheet):
     data = sheet.get_all_records()
@@ -103,7 +72,8 @@ def actualizar_fecha(sheet, entidad, nueva_fecha):
 def enviar_notificacion(entidad, anterior, nueva):
     try:
         client = Client(TWILIO_SID, TWILIO_TOKEN)
-        body = f"📢 Cambio detectado en {entidad}:\n{anterior} → {nueva}"
+        body = f"📢 Cambio detectado en {entidad}:
+{anterior} → {nueva}"
         message = client.messages.create(
             body=body,
             from_=TWILIO_FROM,
@@ -132,42 +102,36 @@ def obtener_mes_siguiente(fecha_str):
     return anio, mes
 
 def verificar_cambios():
-    global estado_actual
-    try:
-        sheet = conectar_google_sheet()
-        fechas_previas = leer_fechas_anteriores(sheet)
+    sheet = conectar_google_sheet()
+    fechas_previas = leer_fechas_anteriores(sheet)
 
-        # Actualizar estado actual
-        estado_actual["ultima_revision"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-        estado_actual["fechas"] = fechas_previas
+    for entidad, fecha_prev in fechas_previas.items():
+        if fecha_prev == "Sin archivos disponibles":
+            continue
 
-        for entidad, fecha_prev in fechas_previas.items():
-            if fecha_prev == "Sin archivos disponibles":
-                continue
+        anio, mes = obtener_mes_siguiente(fecha_prev)
+        existe = verificar_archivo(anio, mes, entidad)
 
-            anio, mes = obtener_mes_siguiente(fecha_prev)
-            existe = verificar_archivo(anio, mes, entidad)
+        if existe:
+            dia_max = monthrange(anio, mes)[1]
+            nueva_fecha = f"{dia_max:02d}/{mes:02d}/{anio}"
+            print(f"🟢 ¡Nuevo mes detectado para {entidad}! {fecha_prev} → {nueva_fecha}")
+            actualizar_fecha(sheet, entidad, nueva_fecha)
+            enviar_notificacion(entidad, fecha_prev, nueva_fecha)
+        else:
+            print(f"🔍 {entidad}: sin cambios (última: {fecha_prev})")
 
-            if existe:
-                dia_max = monthrange(anio, mes)[1]
-                nueva_fecha = f"{dia_max:02d}/{mes:02d}/{anio}"
-                print(f"🟢 ¡Nuevo mes detectado para {entidad}! {fecha_prev} → {nueva_fecha}")
-                actualizar_fecha(sheet, entidad, nueva_fecha)
-                enviar_notificacion(entidad, fecha_prev, nueva_fecha)
-            else:
-                print(f"🔍 {entidad}: sin cambios (última: {fecha_prev})")
-    except Exception as e:
-        print(f"❌ Error en verificar cambios: {e}")
-
-# --- LOOP PRINCIPAL ---
+# --- LOOP PRINCIPAL (cada 1 hora) ---
 def iniciar_verificador():
     while True:
         print("⏳ Verificando cambios en SBS...")
-        verificar_cambios()
-        print("🕒 Próxima verificación en 1 hora...")
+        try:
+            verificar_cambios()
+        except Exception as e:
+            print(f"❌ Error en verificación: {e}")
+        print("🕒 Próxima verificación en 1 hora...
+")
         time.sleep(3600)
 
 if __name__ == "__main__":
-    Thread(target=run_web).start()  # Servidor Flask
     iniciar_verificador()
-
