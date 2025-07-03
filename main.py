@@ -16,7 +16,7 @@ GOOGLE_CRED_JSON = {
     "type": "service_account",
     "project_id": "tu_project_id",
     "private_key_id": "tu_private_key_id",
-    "private_key": "-----BEGIN PRIVATE KEY-----\\nMIIEv...\\n-----END PRIVATE KEY-----\\n",
+    "private_key": "-----BEGIN PRIVATE KEY-----\\nMIIEvgIBADANBgkq...restodelaclave...\\n-----END PRIVATE KEY-----\\n",
     "client_email": "tu_email@project.iam.gserviceaccount.com",
     "client_id": "tu_client_id",
     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
