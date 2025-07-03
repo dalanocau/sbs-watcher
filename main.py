@@ -129,8 +129,7 @@ def iniciar_verificador():
             verificar_cambios()
         except Exception as e:
             print(f"❌ Error en verificación: {e}")
-        print("🕒 Próxima verificación en 1 hora...
-")
+        print("🕒 Próxima verificación en 1 hora...")
         time.sleep(3600)
 
 if __name__ == "__main__":
