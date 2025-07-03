@@ -6,12 +6,24 @@ from datetime import datetime
 from calendar import monthrange
 import requests
 import time
-import os
-import json
 from twilio.rest import Client
 
 # --- CONFIGURACIÓN ---
 SHEET_NAME = "verificacion_fechas"
+
+# Credenciales de Google Sheets (copiadas directamente del JSON)
+GOOGLE_CRED_JSON = {
+    "type": "service_account",
+    "project_id": "tu_project_id",
+    "private_key_id": "tu_private_key_id",
+    "private_key": "-----BEGIN PRIVATE KEY-----\\nMIIEv...\\n-----END PRIVATE KEY-----\\n",
+    "client_email": "tu_email@project.iam.gserviceaccount.com",
+    "client_id": "tu_client_id",
+    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+    "token_uri": "https://oauth2.googleapis.com/token",
+    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+    "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/tu_email%40project.iam.gserviceaccount.com"
+}
 
 # Twilio
 TWILIO_SID = "AC27f9a63a992b1f8ddc57b894aad851fe"
@@ -62,37 +74,24 @@ def run_web():
 # --- GOOGLE SHEETS ---
 def conectar_google_sheet():
     try:
-        creds_json = os.getenv('GOOGLE_CRED_JSON')
-        if not creds_json:
-            raise Exception("⚠️ GOOGLE_CRED_JSON no está configurado en las variables de entorno.")
-        creds_dict = json.loads(creds_json)
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(GOOGLE_CRED_JSON, scope)
         client = gspread.authorize(creds)
-        print("✅ Conectado a Google Sheets correctamente.")
         return client.open(SHEET_NAME).sheet1
     except Exception as e:
         print(f"❌ Error al conectar con Google Sheets: {e}")
         raise
 
 def leer_fechas_anteriores(sheet):
-    try:
-        data = sheet.get_all_records()
-        return {row['ENTIDAD']: row['FECHA_ANTERIOR'] for row in data}
-    except Exception as e:
-        print(f"❌ Error al leer fechas anteriores: {e}")
-        return {}
+    data = sheet.get_all_records()
+    return {row['ENTIDAD']: row['FECHA_ANTERIOR'] for row in data}
 
 def actualizar_fecha(sheet, entidad, nueva_fecha):
-    try:
-        data = sheet.get_all_records()
-        for i, row in enumerate(data, start=2):
-            if row['ENTIDAD'] == entidad:
-                sheet.update_cell(i, 2, nueva_fecha)
-                print(f"✅ Fecha actualizada en Sheets para {entidad}: {nueva_fecha}")
-                break
-    except Exception as e:
-        print(f"❌ Error al actualizar fecha en Sheets: {e}")
+    data = sheet.get_all_records()
+    for i, row in enumerate(data, start=2):
+        if row['ENTIDAD'] == entidad:
+            sheet.update_cell(i, 2, nueva_fecha)
+            break
 
 # --- NOTIFICACIÓN POR WHATSAPP ---
 def enviar_notificacion(entidad, anterior, nueva):
@@ -115,10 +114,9 @@ def verificar_archivo(anio, mes, entidad):
     url = f"https://intranet2.sbs.gob.pe/estadistica/financiera/{anio}/{mes_nombre}/"
     archivo = f"{codigo}-{mes_abr}{anio}.xls"
     try:
-        response = requests.head(f"{url}{archivo}", timeout=10)
+        response = requests.head(f"{url}{archivo}", timeout=5)
         return response.status_code == 200
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Error al verificar archivo para {entidad}: {e}")
+    except requests.exceptions.RequestException:
         return None
 
 def obtener_mes_siguiente(fecha_str):
@@ -129,30 +127,28 @@ def obtener_mes_siguiente(fecha_str):
 
 def verificar_cambios():
     global estado_actual
-    try:
-        sheet = conectar_google_sheet()
-        fechas_previas = leer_fechas_anteriores(sheet)
+    sheet = conectar_google_sheet()
+    fechas_previas = leer_fechas_anteriores(sheet)
 
-        estado_actual["ultima_revision"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-        estado_actual["fechas"] = fechas_previas
+    # Actualizar estado actual para el endpoint
+    estado_actual["ultima_revision"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    estado_actual["fechas"] = fechas_previas
 
-        for entidad, fecha_prev in fechas_previas.items():
-            if fecha_prev == "Sin archivos disponibles":
-                continue
+    for entidad, fecha_prev in fechas_previas.items():
+        if fecha_prev == "Sin archivos disponibles":
+            continue
 
-            anio, mes = obtener_mes_siguiente(fecha_prev)
-            existe = verificar_archivo(anio, mes, entidad)
+        anio, mes = obtener_mes_siguiente(fecha_prev)
+        existe = verificar_archivo(anio, mes, entidad)
 
-            if existe:
-                dia_max = monthrange(anio, mes)[1]
-                nueva_fecha = f"{dia_max:02d}/{mes:02d}/{anio}"
-                print(f"🟢 ¡Nuevo mes detectado para {entidad}! {fecha_prev} → {nueva_fecha}")
-                actualizar_fecha(sheet, entidad, nueva_fecha)
-                enviar_notificacion(entidad, fecha_prev, nueva_fecha)
-            else:
-                print(f"🔍 {entidad}: sin cambios (última: {fecha_prev})")
-    except Exception as e:
-        print(f"❌ Error en verificar cambios: {e}")
+        if existe:
+            dia_max = monthrange(anio, mes)[1]
+            nueva_fecha = f"{dia_max:02d}/{mes:02d}/{anio}"
+            print(f"🟢 ¡Nuevo mes detectado para {entidad}! {fecha_prev} → {nueva_fecha}")
+            actualizar_fecha(sheet, entidad, nueva_fecha)
+            enviar_notificacion(entidad, fecha_prev, nueva_fecha)
+        else:
+            print(f"🔍 {entidad}: sin cambios (última: {fecha_prev})")
 
 # --- LOOP PRINCIPAL ---
 def iniciar_verificador():
@@ -161,10 +157,10 @@ def iniciar_verificador():
         try:
             verificar_cambios()
         except Exception as e:
-            print(f"❌ Error en el ciclo principal: {e}")
+            print(f"❌ Error en verificar cambios: {e}")
         print("🕒 Próxima verificación en 1 hora...")
         time.sleep(3600)
 
 if __name__ == "__main__":
-    Thread(target=run_web).start()  # Servir Flask
+    Thread(target=run_web).start()  # Arranca Flask en hilo aparte
     iniciar_verificador()
