@@ -1,12 +1,9 @@
-from flask import Flask
-from threading import Thread
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 from calendar import monthrange
 import requests
 import time
-from pytz import timezone
 from twilio.rest import Client
 
 # --- CONFIGURACIÓN ---
@@ -37,27 +34,6 @@ abreviaturas = {
     5: ('Mayo', 'my'), 6: ('Junio', 'jn'), 7: ('Julio', 'jl'), 8: ('Agosto', 'ag'),
     9: ('Setiembre', 'se'), 10: ('Octubre', 'oc'), 11: ('Noviembre', 'no'), 12: ('Diciembre', 'di')
 }
-
-# Estado actual para la página web
-estado_actual = {
-    "ultima_revision": "No se ha hecho ninguna revisión aún",
-    "fechas": {}
-}
-
-# --- SERVIDOR FLASK PARA RENDER ---
-app = Flask(__name__)
-
-@app.route("/")
-def home():
-    respuesta = f"✅ SBS Watcher activo en Render\n"
-    respuesta += f"🔍 Última revisión: {estado_actual['ultima_revision']}\n"
-    respuesta += "📅 Fechas actuales:\n"
-    for entidad, fecha in estado_actual['fechas'].items():
-        respuesta += f"- {entidad}: {fecha}\n"
-    return "<pre>" + respuesta + "</pre>"
-
-def run_web():
-    app.run(host="0.0.0.0", port=8080)
 
 # --- GOOGLE SHEETS ---
 def conectar_google_sheet():
@@ -110,13 +86,8 @@ def obtener_mes_siguiente(fecha_str):
     return anio, mes
 
 def verificar_cambios():
-    global estado_actual
     sheet = conectar_google_sheet()
     fechas_previas = leer_fechas_anteriores(sheet)
-
-    # Actualizar estado actual
-    estado_actual["ultima_revision"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    estado_actual["fechas"] = fechas_previas
 
     for entidad, fecha_prev in fechas_previas.items():
         if fecha_prev == "Sin archivos disponibles":
@@ -145,7 +116,5 @@ def iniciar_verificador():
         print("🕒 Próxima verificación en 1 hora...")
         time.sleep(3600)
 
-# --- INICIAR AMBOS HILOS ---
 if __name__ == "__main__":
-    Thread(target=run_web).start()
-    Thread(target=iniciar_verificador).start()
+    iniciar_verificador()
