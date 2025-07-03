@@ -73,8 +73,7 @@ def actualizar_fecha(sheet, entidad, nueva_fecha):
 def enviar_notificacion(entidad, anterior, nueva):
     try:
         client = Client(TWILIO_SID, TWILIO_TOKEN)
-        body = f"📢 Cambio detectado en {entidad}:
-{anterior} → {nueva}"
+        body = f"📢 Cambio detectado en {entidad}:\n{anterior} → {nueva}"
         message = client.messages.create(
             body=body,
             from_=TWILIO_FROM,
