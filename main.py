@@ -59,8 +59,6 @@ def home():
 def run_web():
     app.run(host="0.0.0.0", port=8080)
 
-Thread(target=run_web).start()
-
 # --- GOOGLE SHEETS ---
 def conectar_google_sheet():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -147,5 +145,7 @@ def iniciar_verificador():
         print("🕒 Próxima verificación en 1 hora...")
         time.sleep(3600)
 
+# --- INICIAR AMBOS HILOS ---
 if __name__ == "__main__":
-    iniciar_verificador()
+    Thread(target=run_web).start()
+    Thread(target=iniciar_verificador).start()
