@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: sbs-verificador-web
+    env: python
+    plan: free
+    buildCommand: ""
+    startCommand: "python app.py"
+    envVars:
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        value: credentials.json
+
+  - type: worker
+    name: sbs-verificador-worker
+    env: python
+    plan: free
+    buildCommand: ""
+    startCommand: "python watcher.py"
+    envVars:
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        value: credentials.json
