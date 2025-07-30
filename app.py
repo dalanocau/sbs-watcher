@@ -7,14 +7,14 @@ from pytz import timezone
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import requests
-from flask import Flask, render_template_string, jsonify
+from flask import Flask, render_template_string, jsonify, make_response
 
 # ------------------- CONFIGURACIÓN -------------------
 CRED_FILE = "credenciales.json"  # 🔹 Sube este archivo a Render o usa variables de entorno
 SHEET_NAME = "verificacion_fechas"
 
 # Configuración de Telegram
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")  # 🔹 Ponlo en Render → Environment Variables
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 codigos_archivo = {
@@ -136,17 +136,20 @@ def ciclo_verificacion():
             check_website_changes()
         except Exception as e:
             print(f"❌ Error en verificación: {e}")
-        time.sleep(60)  # 🔹 Cambia a 1800 para 30 minutos
+        time.sleep(60)  # 🔹 Cambia a 1800 para cada 30 min
 
 # ------------------- SERVIDOR WEB -------------------
 app = Flask(__name__)
 
 @app.route("/data")
 def data():
-    return jsonify({
+    resp = make_response(jsonify({
         "ultimo_envio": ultimo_envio,
         "datos": ultimo_resultado
-    })
+    }))
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 TEMPLATE = """
 <!DOCTYPE html>
@@ -197,7 +200,7 @@ TEMPLATE = """
             .catch(error => console.error("Error actualizando datos:", error));
     }
 
-    setInterval(actualizarDatos, 60000); // 60 segundos
+    setInterval(actualizarDatos, 5000); // cada 5 segundos
     actualizarDatos();
 </script>
 </body>
@@ -209,6 +212,7 @@ def home():
     return render_template_string(TEMPLATE, datos=ultimo_resultado, ultimo_envio=ultimo_envio)
 
 if __name__ == "__main__":
+    check_website_changes()  # 🔹 Hace la primera verificación antes de arrancar
     threading.Thread(target=ciclo_verificacion, daemon=True).start()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
