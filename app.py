@@ -7,7 +7,7 @@ from pytz import timezone
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import requests
-from flask import Flask, render_template_string
+from flask import Flask, render_template_string, jsonify
 
 # ------------------- CONFIGURACIÓN -------------------
 CRED_FILE = "credenciales.json"  # 🔹 Sube este archivo a Render o usa variables de entorno
@@ -136,10 +136,17 @@ def ciclo_verificacion():
             check_website_changes()
         except Exception as e:
             print(f"❌ Error en verificación: {e}")
-        time.sleep(60)  # 30 minutos
+        time.sleep(60)  # 🔹 Cambia a 1800 para 30 minutos
 
 # ------------------- SERVIDOR WEB -------------------
 app = Flask(__name__)
+
+@app.route("/data")
+def data():
+    return jsonify({
+        "ultimo_envio": ultimo_envio,
+        "datos": ultimo_resultado
+    })
 
 TEMPLATE = """
 <!DOCTYPE html>
@@ -152,7 +159,7 @@ TEMPLATE = """
 <body class="bg-light">
 <div class="container py-4">
     <h1 class="text-center mb-4">📊 Verificación de Archivos SBS</h1>
-    <p class="text-center">Última verificación: <strong>{{ ultimo_envio }}</strong></p>
+    <p class="text-center">Última verificación: <strong id="ultimo_envio">{{ ultimo_envio }}</strong></p>
     <table class="table table-bordered table-hover bg-white shadow-sm">
         <thead class="table-primary">
             <tr>
@@ -160,7 +167,7 @@ TEMPLATE = """
                 <th>Última Fecha</th>
             </tr>
         </thead>
-        <tbody>
+        <tbody id="tabla_datos">
             {% for entidad, fecha in datos.items() %}
             <tr>
                 <td>{{ entidad }}</td>
@@ -170,6 +177,29 @@ TEMPLATE = """
         </tbody>
     </table>
 </div>
+
+<script>
+    function actualizarDatos() {
+        fetch("/data")
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById("ultimo_envio").innerText = data.ultimo_envio;
+                let tbody = document.getElementById("tabla_datos");
+                tbody.innerHTML = "";
+                for (let entidad in data.datos) {
+                    let fila = `<tr>
+                        <td>${entidad}</td>
+                        <td>${data.datos[entidad]}</td>
+                    </tr>`;
+                    tbody.innerHTML += fila;
+                }
+            })
+            .catch(error => console.error("Error actualizando datos:", error));
+    }
+
+    setInterval(actualizarDatos, 60000); // 60 segundos
+    actualizarDatos();
+</script>
 </body>
 </html>
 """
@@ -179,8 +209,6 @@ def home():
     return render_template_string(TEMPLATE, datos=ultimo_resultado, ultimo_envio=ultimo_envio)
 
 if __name__ == "__main__":
-    # Iniciar el ciclo de verificación en segundo plano
     threading.Thread(target=ciclo_verificacion, daemon=True).start()
-    # Servidor para Render
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
