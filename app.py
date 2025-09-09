@@ -49,13 +49,30 @@ def leer_fechas_anteriores(sheet):
     data = sheet.get_all_records()
     return {row['ENTIDAD']: row['FECHA_ANTERIOR'] for row in data}
 
-def actualizar_fechas(sheet, nuevas_fechas):
+def actualizar_fechas_y_timestamps(sheet, nuevas_fechas, timestamp):
+    """
+    Actualiza las fechas y el timestamp de verificación en el sheet
+    Asume que las columnas son: A=ENTIDAD, B=FECHA_ANTERIOR, C=ULTIMA_VERIFICACION
+    """
     data = sheet.get_all_records()
+    
+    # Verificar si existe la columna ULTIMA_VERIFICACION
+    headers = sheet.row_values(1)
+    if 'ULTIMA_VERIFICACION' not in headers:
+        # Agregar header si no existe
+        if len(headers) < 3:
+            sheet.update_cell(1, 3, 'ULTIMA_VERIFICACION')
+    
     for i, row in enumerate(data, start=2):
         entidad = row['ENTIDAD']
         nueva_fecha = nuevas_fechas.get(entidad)
+        
         if nueva_fecha:
+            # Actualizar fecha (columna B)
             sheet.update_cell(i, 2, nueva_fecha)
+        
+        # Actualizar timestamp de verificación (columna C)
+        sheet.update_cell(i, 3, timestamp)
 
 def enviar_telegram(mensaje):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
@@ -104,6 +121,10 @@ def es_fecha_valida(fecha):
 
 def check_website_changes():
     global ultimo_resultado, ultimo_envio
+    
+    # Timestamp actual
+    timestamp_actual = datetime.now(timezone('America/Lima')).strftime('%Y-%m-%d %H:%M:%S %Z')
+    
     sheet = conectar_google_sheet()
     fechas_anteriores = leer_fechas_anteriores(sheet)
     fechas_nuevas = {}
@@ -125,9 +146,11 @@ def check_website_changes():
         else:
             fechas_nuevas[entidad] = fecha_actual
 
-    actualizar_fechas(sheet, fechas_nuevas)
+    # Actualizar fechas Y timestamps en el sheet
+    actualizar_fechas_y_timestamps(sheet, fechas_nuevas, timestamp_actual)
+    
     ultimo_resultado = fechas_nuevas
-    ultimo_envio = datetime.now(timezone('America/Lima')).strftime('%Y-%m-%d %H:%M:%S %Z')
+    ultimo_envio = timestamp_actual
     print(f"✅ Verificación completada: {ultimo_envio}")
 
 def ciclo_verificacion():
@@ -163,6 +186,9 @@ TEMPLATE = """
 <div class="container py-4">
     <h1 class="text-center mb-4">📊 Verificación de Archivos SBS</h1>
     <p class="text-center">Última verificación: <strong id="ultimo_envio">{{ ultimo_envio }}</strong></p>
+    <div class="alert alert-info">
+        <strong>ℹ️ Nota:</strong> Cada verificación actualiza el timestamp en el Google Sheet (columna "ULTIMA_VERIFICACION")
+    </div>
     <table class="table table-bordered table-hover bg-white shadow-sm">
         <thead class="table-primary">
             <tr>
