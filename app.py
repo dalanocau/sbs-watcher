@@ -136,7 +136,7 @@ def ciclo_verificacion():
             check_website_changes()
         except Exception as e:
             print(f"❌ Error en verificación: {e}")
-        time.sleep(60)  # 🔹 Cambia a 1800 para cada 30 min
+        time.sleep(5)  # 🔹 Cambia a 1800 para cada 30 min
 
 # ------------------- SERVIDOR WEB -------------------
 app = Flask(__name__)
