@@ -12,13 +12,8 @@ import json
 import tempfile
 
 # ------------------- CONFIGURACIÓN -------------------
-# ✅ Ahora el JSON se toma de una VARIABLE DE ENTORNO
-#    En Cloud Run debes crear una variable llamada GCP_CREDENTIALS_JSON
-#    que contenga TODO el contenido del archivo .json de tu service account
 GCP_CREDENTIALS_JSON = os.getenv("GCP_CREDENTIALS_JSON")
 SHEET_NAME = "verificacion_fechas"
-
-# ✅ Configuración de Telegram vía variables de entorno
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -45,17 +40,16 @@ ultimo_envio = "Nunca"
 
 # ------------------- FUNCIONES -------------------
 def conectar_google_sheet():
-    # ✅ Guardamos el JSON de la variable en un archivo temporal
     if not GCP_CREDENTIALS_JSON:
         raise RuntimeError("⚠️ Variable GCP_CREDENTIALS_JSON no configurada")
-
     creds_dict = json.loads(GCP_CREDENTIALS_JSON)
-    with tempfile.NamedTemporaryFile(mode="w+", delete=False) as tmp:
+    with tempfile.NamedTemporaryFile(mode="w+", suffix=".json", delete=False) as tmp:
         json.dump(creds_dict, tmp)
-        tmp.flush()
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = ServiceAccountCredentials.from_json_keyfile_name(tmp.name, scope)
-        client = gspread.authorize(creds)
+        tmp_name = tmp.name
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_name(tmp_name, scope)
+    client = gspread.authorize(creds)
+    os.unlink(tmp_name)  # limpia el archivo temporal
     return client.open(SHEET_NAME).sheet1
 
 def leer_fechas_anteriores(sheet):
@@ -68,7 +62,6 @@ def actualizar_fechas_y_timestamps(sheet, nuevas_fechas, timestamp):
     if 'ULTIMA_VERIFICACION' not in headers:
         if len(headers) < 3:
             sheet.update_cell(1, 3, 'ULTIMA_VERIFICACION')
-
     for i, row in enumerate(data, start=2):
         entidad = row['ENTIDAD']
         nueva_fecha = nuevas_fechas.get(entidad)
@@ -83,7 +76,7 @@ def enviar_telegram(mensaje):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje}
     try:
-        requests.post(url, json=payload)
+        requests.post(url, json=payload, timeout=10)
         print(f"📲 Telegram enviado: {mensaje}")
     except Exception as e:
         print(f"❌ Error enviando Telegram: {e}")
@@ -109,7 +102,7 @@ def verificar_archivo(anio, mes, entidad):
     archivo = f"{codigo}-{mes_abr}{anio}.xls"
     full_url = f"{url}{archivo}"
     try:
-        response = requests.head(full_url, timeout=3)
+        response = requests.head(full_url, timeout=5)
         return response.status_code == 200
     except:
         return None
@@ -124,6 +117,7 @@ def es_fecha_valida(fecha):
 def check_website_changes():
     global ultimo_resultado, ultimo_envio
     timestamp_actual = datetime.now(timezone('America/Lima')).strftime('%Y-%m-%d %H:%M:%S %Z')
+    print(f"🔍 Iniciando verificación: {timestamp_actual}")
 
     sheet = conectar_google_sheet()
     fechas_anteriores = leer_fechas_anteriores(sheet)
@@ -133,11 +127,9 @@ def check_website_changes():
         if not es_fecha_valida(fecha_actual):
             fechas_nuevas[entidad] = fecha_actual
             continue
-
         siguiente_fecha_str, anio, mes = obtener_mes_siguiente(fecha_actual)
         if not (anio and mes):
             continue
-
         existe = verificar_archivo(anio, mes, entidad)
         if existe:
             msg = f"🟡 Nuevo archivo SBS para {entidad}: {siguiente_fecha_str}"
@@ -152,24 +144,22 @@ def check_website_changes():
     print(f"✅ Verificación completada: {ultimo_envio}")
 
 def ciclo_verificacion():
+    # ✅ Espera 5 segundos para que Flask esté listo antes de la primera verificación
+    time.sleep(5)
     while True:
         try:
             check_website_changes()
         except Exception as e:
             print(f"❌ Error en verificación: {e}")
-        time.sleep(60)  # cada 30 min (ajusta si necesitas pruebas rápidas)
+        time.sleep(1800)  # cada 30 minutos
 
 # ------------------- SERVIDOR WEB -------------------
 app = Flask(__name__)
 
-# ✅ Mover inicio del hilo FUERA de if __main__
-#    Así Cloud Run (gunicorn) ejecuta el ciclo aunque no entre a __main__
-threading.Thread(target=ciclo_verificacion, daemon=True).start()
-# Primera verificación inmediata
-try:
-    check_website_changes()
-except Exception as e:
-    print(f"❌ Error inicial: {e}")
+# ✅ Health check: Cloud Run llama a este endpoint para saber si el servicio está vivo
+@app.route("/healthz")
+def healthz():
+    return "ok", 200
 
 @app.route("/data")
 def data():
@@ -213,7 +203,6 @@ TEMPLATE = """
         </tbody>
     </table>
 </div>
-
 <script>
     function actualizarDatos() {
         fetch("/data")
@@ -223,16 +212,12 @@ TEMPLATE = """
                 let tbody = document.getElementById("tabla_datos");
                 tbody.innerHTML = "";
                 for (let entidad in data.datos) {
-                    let fila = `<tr>
-                        <td>${entidad}</td>
-                        <td>${data.datos[entidad]}</td>
-                    </tr>`;
+                    let fila = `<tr><td>${entidad}</td><td>${data.datos[entidad]}</td></tr>`;
                     tbody.innerHTML += fila;
                 }
             })
             .catch(error => console.error("Error actualizando datos:", error));
     }
-
     setInterval(actualizarDatos, 5000);
     actualizarDatos();
 </script>
@@ -244,8 +229,9 @@ TEMPLATE = """
 def home():
     return render_template_string(TEMPLATE, datos=ultimo_resultado, ultimo_envio=ultimo_envio)
 
-# ✅ El bloque __main__ ahora solo se usa para pruebas locales
+# ✅ El hilo arranca aquí pero con delay interno — no bloquea el import
+threading.Thread(target=ciclo_verificacion, daemon=True).start()
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-
