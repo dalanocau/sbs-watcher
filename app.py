@@ -17,6 +17,9 @@ SHEET_NAME = "verificacion_fechas"
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
+# ✅ URL del propio servicio para el auto-ping (Cloud Run la inyecta automáticamente)
+SERVICE_URL = os.getenv("SERVICE_URL", "")
+
 codigos_archivo = {
     "BANCOS": "B-2201",
     "FINANCIERAS": "B-3101",
@@ -43,14 +46,18 @@ def conectar_google_sheet():
     if not GCP_CREDENTIALS_JSON:
         raise RuntimeError("⚠️ Variable GCP_CREDENTIALS_JSON no configurada")
     creds_dict = json.loads(GCP_CREDENTIALS_JSON)
-    with tempfile.NamedTemporaryFile(mode="w+", suffix=".json", delete=False) as tmp:
-        json.dump(creds_dict, tmp)
-        tmp_name = tmp.name
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(tmp_name, scope)
-    client = gspread.authorize(creds)
-    os.unlink(tmp_name)  # limpia el archivo temporal
-    return client.open(SHEET_NAME).sheet1
+    tmp_name = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w+", suffix=".json", delete=False) as tmp:
+            json.dump(creds_dict, tmp)
+            tmp_name = tmp.name
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_name(tmp_name, scope)
+        client = gspread.authorize(creds)
+        return client.open(SHEET_NAME).sheet1
+    finally:
+        if tmp_name and os.path.exists(tmp_name):
+            os.unlink(tmp_name)
 
 def leer_fechas_anteriores(sheet):
     data = sheet.get_all_records()
@@ -144,19 +151,36 @@ def check_website_changes():
     print(f"✅ Verificación completada: {ultimo_envio}")
 
 def ciclo_verificacion():
-    # ✅ Espera 5 segundos para que Flask esté listo antes de la primera verificación
+    # Pequeño delay para que Flask esté listo
     time.sleep(5)
     while True:
         try:
             check_website_changes()
         except Exception as e:
             print(f"❌ Error en verificación: {e}")
-        time.sleep(5)  # cada 30 minutos
+        time.sleep(60)  # cada 60 segundos — igual que el código anterior que funcionaba
+
+def ciclo_keepalive():
+    """
+    ✅ Se hace un ping a sí mismo cada 4 minutos para evitar que
+    Cloud Run escale a cero la instancia y mate el hilo de verificación.
+    Cloud Run duerme instancias sin tráfico HTTP — este hilo genera ese tráfico.
+    """
+    time.sleep(30)  # espera a que Flask esté completamente listo
+    while True:
+        try:
+            if SERVICE_URL:
+                requests.get(f"{SERVICE_URL}/healthz", timeout=10)
+                print(f"🏓 Keepalive ping OK: {datetime.now(timezone('America/Lima')).strftime('%H:%M:%S')}")
+            else:
+                print("⚠️ SERVICE_URL no configurada, keepalive desactivado")
+        except Exception as e:
+            print(f"⚠️ Keepalive falló: {e}")
+        time.sleep(240)  # ping cada 4 minutos
 
 # ------------------- SERVIDOR WEB -------------------
 app = Flask(__name__)
 
-# ✅ Health check: Cloud Run llama a este endpoint para saber si el servicio está vivo
 @app.route("/healthz")
 def healthz():
     return "ok", 200
@@ -229,8 +253,9 @@ TEMPLATE = """
 def home():
     return render_template_string(TEMPLATE, datos=ultimo_resultado, ultimo_envio=ultimo_envio)
 
-# ✅ El hilo arranca aquí pero con delay interno — no bloquea el import
+# ✅ Arranque de hilos — sin código síncrono pesado aquí
 threading.Thread(target=ciclo_verificacion, daemon=True).start()
+threading.Thread(target=ciclo_keepalive, daemon=True).start()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
