@@ -176,7 +176,7 @@ def ciclo_keepalive():
                 print("⚠️ SERVICE_URL no configurada, keepalive desactivado")
         except Exception as e:
             print(f"⚠️ Keepalive falló: {e}")
-        time.sleep(240)  # ping cada 4 minutos
+        time.sleep(90)  # ping cada 4 minutos
 
 # ------------------- SERVIDOR WEB -------------------
 app = Flask(__name__)
