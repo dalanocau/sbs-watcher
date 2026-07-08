@@ -28,6 +28,11 @@ codigos_archivo = {
     "EMPRESAS_CREDITO": "C-4103",
     "DEPOSITOS_CAJA": "C-1245",
     "DEPOSITOS_FINANCIERAS": "B-3231",
+    "CLIENTES_CREDITO_BANCOS": "B-230803",
+    "CLIENTES_CREDITO_FINANCIERAS": "B-3218",
+    "CLIENTES_CREDITO_CMACS": "C-1231",
+    "CLIENTES_CREDITO_CRACS": "C-2231",
+    "CLIENTES_CREDITO_EDPYMES": "C-4226",
     "COLOCACIONES_EC": "C-4223"
 }
 
@@ -176,7 +181,7 @@ def ciclo_keepalive():
                 print("⚠️ SERVICE_URL no configurada, keepalive desactivado")
         except Exception as e:
             print(f"⚠️ Keepalive falló: {e}")
-        time.sleep(90)  # ping cada 4 minutos
+        time.sleep(30)  # ping cada 4 minutos
 
 # ------------------- SERVIDOR WEB -------------------
 app = Flask(__name__)
