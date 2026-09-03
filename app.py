@@ -127,35 +127,49 @@ def _todas_las_combinaciones():
             yield base, familia, codigo
 
 
+def leer_fechas_sheet(sheet):
+    """
+    Lee el sheet completo y devuelve (fechas, filas, total_filas) SIN sembrar
+    nada nuevo. Se usa tanto en sincronizar_sheet (arranque) como en cada
+    ciclo de ciclo_verificacion, para recoger cualquier edición manual que
+    se haya hecho al sheet mientras el servicio seguía corriendo -- de otro
+    modo, la app solo conoce lo que leyó al arrancar y nunca se entera de
+    cambios manuales posteriores.
+    """
+    valores = sheet.get_all_values()
+    fechas = {}
+    filas = {}
+    for i, fila in enumerate(valores[1:], start=2):
+        # Google recorta las celdas vacías al FINAL de cada fila al leerlas
+        # (get_all_values) -- si ULTIMA_VERIFICACION está vacía, la fila
+        # llega con 4 columnas en vez de 5, no 5 exactas. Por eso se accede
+        # con índices seguros en vez de exigir len(fila) >= 5.
+        if len(fila) < 3:
+            continue
+        base = fila[1] if len(fila) > 1 else ""
+        familia = fila[2] if len(fila) > 2 else ""
+        fecha = fila[3] if len(fila) > 3 else ""
+        if base and familia:
+            fechas[(base, familia)] = fecha or None
+            filas[(base, familia)] = i
+    return fechas, filas, len(valores)
+
+
 def sincronizar_sheet(sheet):
     """
     Lee el sheet completo, arma fechas_completas/filas_sheet en memoria, y
     agrega (append) cualquier fila (base, familia) que todavía no exista --
     sembrando su fecha inicial con bootstrap_fecha(). Se corre una sola vez
-    al arrancar el servicio.
+    al arrancar el servicio (la relectura periódica del sheet mientras corre
+    la hace leer_fechas_sheet, sin la parte de siembra).
     """
     global fechas_completas, filas_sheet
 
-    valores = sheet.get_all_values()
-    if not valores:
+    valores_iniciales = sheet.get_all_values()
+    if not valores_iniciales:
         sheet.update(values=[HEADERS], range_name="A1")
-        valores = [HEADERS]
 
-    headers_actuales = valores[0]
-    if headers_actuales != HEADERS:
-        # sheet viejo (13 entidades planas) -- no lo tocamos, solo agregamos
-        # las filas nuevas después de lo que ya haya
-        pass
-
-    fechas_completas = {}
-    filas_sheet = {}
-    for i, fila in enumerate(valores[1:], start=2):
-        if len(fila) < 5:
-            continue
-        base, familia, fecha = fila[1], fila[2], fila[3]
-        if base and familia:
-            fechas_completas[(base, familia)] = fecha or None
-            filas_sheet[(base, familia)] = i
+    fechas_completas, filas_sheet, total_filas = leer_fechas_sheet(sheet)
 
     # detectar combinaciones nuevas que falten y sembrarlas -- en paralelo,
     # porque son hasta 82 combinaciones x hasta 8 meses hacia atrás cada una
@@ -178,7 +192,7 @@ def sincronizar_sheet(sheet):
                     resultados_bootstrap[(base, familia)] = None
 
     filas_nuevas = []
-    siguiente_fila = len(valores) + 1
+    siguiente_fila = total_filas + 1
     for base, familia, codigo in faltantes:
         key = (base, familia)
         fecha_inicial = resultados_bootstrap.get(key)
@@ -189,7 +203,7 @@ def sincronizar_sheet(sheet):
         siguiente_fila += 1
 
     if filas_nuevas:
-        rango = f"A{len(valores) + 1}:E{len(valores) + len(filas_nuevas)}"
+        rango = f"A{total_filas + 1}:E{total_filas + len(filas_nuevas)}"
         sheet.update(values=filas_nuevas, range_name=rango)
         print(f"✅ {len(filas_nuevas)} filas nuevas agregadas al sheet")
 
@@ -362,7 +376,7 @@ def revisar_bloque(sheet, bases_del_bloque):
 
 # ------------------- CICLOS EN SEGUNDO PLANO -------------------
 def ciclo_verificacion():
-    global estado_agrupado, ultimo_envio, bloque_actual
+    global estado_agrupado, ultimo_envio, bloque_actual, fechas_completas, filas_sheet
 
     time.sleep(5)
     sheet = None
@@ -379,6 +393,15 @@ def ciclo_verificacion():
 
     while True:
         try:
+            # relee el sheet completo antes de revisar el bloque -- así, si
+            # alguien edita fechas a mano mientras el servicio sigue
+            # corriendo (para corregir o probar algo), se recoge en el
+            # siguiente ciclo (máx. 60s) en vez de quedar invisible hasta
+            # el próximo reinicio del servicio
+            fechas_sheet, filas_nuevas_sheet, _ = leer_fechas_sheet(sheet)
+            fechas_completas.update(fechas_sheet)
+            filas_sheet.update(filas_nuevas_sheet)
+
             bloque = BLOQUES[bloque_actual % len(BLOQUES)]
             print(f"🔍 Revisando bloque {bloque_actual % len(BLOQUES) + 1}/{len(BLOQUES)}: {bloque}")
             ts = revisar_bloque(sheet, bloque)
