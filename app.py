@@ -333,7 +333,15 @@ def construir_estado_agrupado():
             "fecha_max": formato_corto(fecha_max_dt.strftime("%d/%m/%Y")) if fecha_max_dt else "—",
             "familias": familias_estado,
         }
-    return estado
+
+    # Bases con al menos una familia atrasada (roja) van primero; las que ya
+    # están 100% al día bajan al final. Dentro de cada grupo se mantiene el
+    # orden original de BASES (sorted es estable). Se recalcula en cada
+    # ciclo, así que el orden cambia solo cuando cambia el estado real.
+    def _tiene_atraso(info):
+        return any(not f["al_dia"] for f in info["familias"].values())
+
+    return dict(sorted(estado.items(), key=lambda kv: not _tiene_atraso(kv[1])))
 
 
 def revisar_bloque(sheet, bases_del_bloque):
