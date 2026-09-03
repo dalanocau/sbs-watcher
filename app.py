@@ -3,6 +3,7 @@ import os
 import threading
 import time
 from calendar import monthrange
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pytz import timezone
 
@@ -137,7 +138,7 @@ def sincronizar_sheet(sheet):
 
     valores = sheet.get_all_values()
     if not valores:
-        sheet.update("A1", [HEADERS])
+        sheet.update(values=[HEADERS], range_name="A1")
         valores = [HEADERS]
 
     headers_actuales = valores[0]
@@ -156,15 +157,31 @@ def sincronizar_sheet(sheet):
             fechas_completas[(base, familia)] = fecha or None
             filas_sheet[(base, familia)] = i
 
-    # detectar combinaciones nuevas que falten y sembrarlas
+    # detectar combinaciones nuevas que falten y sembrarlas -- en paralelo,
+    # porque son hasta 82 combinaciones x hasta 8 meses hacia atrás cada una
+    # (podrían ser cientos de HEAD requests); en serie tardaría demasiado
+    faltantes = [(base, familia, codigo) for base, familia, codigo in _todas_las_combinaciones()
+                 if (base, familia) not in filas_sheet]
+
+    resultados_bootstrap = {}
+    if faltantes:
+        print(f"🌱 Sembrando {len(faltantes)} filas nuevas (en paralelo)...")
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futuros = {executor.submit(bootstrap_fecha, codigo): (base, familia)
+                       for base, familia, codigo in faltantes}
+            for futuro in as_completed(futuros):
+                base, familia = futuros[futuro]
+                try:
+                    resultados_bootstrap[(base, familia)] = futuro.result()
+                except Exception as e:
+                    print(f"⚠️ Bootstrap falló para {base}/{familia}: {e}")
+                    resultados_bootstrap[(base, familia)] = None
+
     filas_nuevas = []
     siguiente_fila = len(valores) + 1
-    for base, familia, codigo in _todas_las_combinaciones():
+    for base, familia, codigo in faltantes:
         key = (base, familia)
-        if key in filas_sheet:
-            continue
-        print(f"🌱 Sembrando fila nueva para {base}/{familia} ({codigo})...")
-        fecha_inicial = bootstrap_fecha(codigo)
+        fecha_inicial = resultados_bootstrap.get(key)
         entidad_key = f"{base}__{familia}"
         filas_nuevas.append([entidad_key, base, familia, fecha_inicial or "", ""])
         fechas_completas[key] = fecha_inicial
@@ -173,7 +190,7 @@ def sincronizar_sheet(sheet):
 
     if filas_nuevas:
         rango = f"A{len(valores) + 1}:E{len(valores) + len(filas_nuevas)}"
-        sheet.update(rango, filas_nuevas)
+        sheet.update(values=filas_nuevas, range_name=rango)
         print(f"✅ {len(filas_nuevas)} filas nuevas agregadas al sheet")
 
 
@@ -348,10 +365,17 @@ def ciclo_verificacion():
     global estado_agrupado, ultimo_envio, bloque_actual
 
     time.sleep(5)
-    sheet = conectar_google_sheet()
-    sincronizar_sheet(sheet)
-    with _lock:
-        estado_agrupado = construir_estado_agrupado()
+    sheet = None
+    while sheet is None:
+        try:
+            sheet = conectar_google_sheet()
+            sincronizar_sheet(sheet)
+            with _lock:
+                estado_agrupado = construir_estado_agrupado()
+        except Exception as e:
+            print(f"❌ Error en la sincronización inicial, reintentando en 30s: {e}")
+            sheet = None
+            time.sleep(30)
 
     while True:
         try:
