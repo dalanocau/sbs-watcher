@@ -453,6 +453,12 @@ def ciclo_keepalive():
 
 # ------------------- SERVIDOR WEB -------------------
 app = Flask(__name__)
+# Por defecto, Flask ordena alfabéticamente las llaves al serializar JSON con
+# jsonify() -- eso rompía el orden "atrasadas primero" que arma
+# construir_estado_agrupado() cada vez que la página consumía /data (el
+# Excel sí lo respetaba porque se arma directo en Python, sin pasar por
+# jsonify). Se desactiva para que la página muestre el mismo orden.
+app.json.sort_keys = False
 
 
 @app.route("/healthz")
