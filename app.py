@@ -208,23 +208,27 @@ def sincronizar_sheet(sheet):
         print(f"✅ {len(filas_nuevas)} filas nuevas agregadas al sheet")
 
 
-def escribir_cambios_sheet(sheet, cambios: dict, timestamp: str):
+def escribir_cambios_sheet(sheet, cambios: dict, revisados: set, timestamp: str):
     """
-    cambios: {(base, familia): nueva_fecha_str}
-    Escribe SOLO las filas que cambiaron en este ciclo, en un solo batch_update
-    (una llamada a la API en vez de una por celda).
+    cambios: {(base, familia): nueva_fecha_str} -- filas con fecha nueva, se
+    escribe FECHA + ULTIMA_VERIFICACION.
+    revisados: TODAS las combinaciones (base, familia) que se chequearon en
+    este ciclo, incluidas las de `cambios`. A las que no tienen fecha nueva
+    se les escribe solo ULTIMA_VERIFICACION -- así queda registro de que sí
+    se revisaron aunque no hubiera nada nuevo todavía (antes esas filas
+    quedaban con ULTIMA_VERIFICACION vacía para siempre, sin forma de saber
+    si se estaban revisando o no).
+    Todo en un solo batch_update (una llamada a la API en vez de una por celda).
     """
-    if not cambios:
-        return
     updates = []
-    for key, nueva_fecha in cambios.items():
+    for key in revisados:
         fila = filas_sheet.get(key)
         if not fila:
             continue
-        updates.append({
-            "range": f"D{fila}:E{fila}",
-            "values": [[nueva_fecha, timestamp]],
-        })
+        if key in cambios:
+            updates.append({"range": f"D{fila}:E{fila}", "values": [[cambios[key], timestamp]]})
+        else:
+            updates.append({"range": f"E{fila}", "values": [[timestamp]]})
     if updates:
         sheet.batch_update(updates)
 
@@ -337,6 +341,7 @@ def revisar_bloque(sheet, bases_del_bloque):
     combinación (base, familia) de ese bloque, no de las 17 bases enteras."""
     timestamp_actual = datetime.now(timezone('America/Lima')).strftime('%Y-%m-%d %H:%M:%S %Z')
     cambios = {}
+    revisados = set()
     nuevos_archivos = []
 
     for base in bases_del_bloque:
@@ -347,6 +352,7 @@ def revisar_bloque(sheet, bases_del_bloque):
             if not es_fecha_valida(fecha_actual):
                 # nunca se pudo sembrar (la SBS no tenía nada en la ventana de
                 # bootstrap) -- se reintenta el bootstrap en este ciclo
+                revisados.add(key)
                 fecha_sembrada = bootstrap_fecha(codigo)
                 if fecha_sembrada:
                     cambios[key] = fecha_sembrada
@@ -356,16 +362,22 @@ def revisar_bloque(sheet, bases_del_bloque):
             anio, mes = obtener_mes_siguiente(fecha_actual)
             if not anio:
                 continue
+            revisados.add(key)
             existe = verificar_archivo_codigo(anio, mes, codigo)
+            mes_nombre, mes_abr = MESES[mes]
+            url_probada = f"https://intranet2.sbs.gob.pe/estadistica/financiera/{anio}/{mes_nombre}/{codigo}-{mes_abr}{anio}.xls"
             if existe:
                 dia_final = monthrange(anio, mes)[1]
                 nueva_fecha = f"{dia_final:02d}/{mes:02d}/{anio}"
                 cambios[key] = nueva_fecha
                 fechas_completas[key] = nueva_fecha
                 nuevos_archivos.append(f"{NOMBRES_BASE[base]} · {NOMBRES_FAMILIA[familia]} → {formato_corto(nueva_fecha)}")
+                print(f"  ✅ {base}/{familia}: encontrado {mes_nombre} {anio} -> {url_probada}")
+            else:
+                print(f"  ⏳ {base}/{familia}: aún no existe {mes_nombre} {anio} ({existe!r}) -> {url_probada}")
 
-    if cambios:
-        escribir_cambios_sheet(sheet, cambios, timestamp_actual)
+    if revisados:
+        escribir_cambios_sheet(sheet, cambios, revisados, timestamp_actual)
 
     if nuevos_archivos:
         mensaje = "📁 Nuevos archivos SBS detectados:\n" + "\n".join(f"• {linea}" for linea in nuevos_archivos)
