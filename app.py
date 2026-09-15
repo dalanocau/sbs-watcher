@@ -30,6 +30,12 @@ SERVICE_URL = os.getenv("SERVICE_URL", "")
 # ráfaga grande de pings al servidor de la SBS de una sola vez.
 INTERVALO_CICLO_SEGUNDOS = 60
 
+# Tamaño mínimo (bytes) para aceptar una respuesta como un .xls real. Una
+# página de error "soft 404" (HTML devuelto con status 200) suele pesar
+# unos pocos KB; un reporte real de la SBS pesa bastante más. Ajustable si
+# ves falsos negativos con reportes legítimamente chicos.
+CONTENT_LENGTH_MINIMO = 5000
+
 # ------------------- LAS 17 BASES DEL PROYECTO SBS MULTIENTIDAD -------------------
 # Mismos códigos que usan los pipelines de procesamiento (procesar_<base>.py).
 # Algunas bases no incluyen EDPYMES porque esa familia no está autorizada a
@@ -269,23 +275,49 @@ def obtener_mes_siguiente(fecha_str):
         return None, None
 
 
+def periodo_cerrado(anio, mes):
+    """True solo si el mes (anio, mes) ya terminó del todo. Es la guardia
+    principal contra los falsos positivos: sin importar lo que responda el
+    servidor de la SBS, jamás tiene sentido buscar el archivo de un periodo
+    que todavía está en curso -- la SBS físicamente no puede haber
+    publicado datos de un mes que no cerró."""
+    hoy = datetime.now(timezone('America/Lima')).date()
+    dia_final = monthrange(anio, mes)[1]
+    fin_periodo = datetime(anio, mes, dia_final).date()
+    return fin_periodo < hoy
+
+
 def verificar_archivo_codigo(anio, mes, codigo):
     mes_nombre, mes_abr = MESES[mes]
     url = f"https://intranet2.sbs.gob.pe/estadistica/financiera/{anio}/{mes_nombre}/{codigo}-{mes_abr}{anio}.xls"
     try:
-        response = requests.head(url, timeout=5)
-        return response.status_code == 200
+        response = requests.head(url, timeout=5, allow_redirects=False)
+        if response.status_code != 200:
+            return False
+        # Guardia extra contra "soft 404": algunos servidores devuelven 200
+        # con una página HTML de error en vez de un 404 real cuando el
+        # archivo no existe. Si el Content-Type es HTML, o el tamaño es
+        # sospechosamente chico para ser un reporte real, lo tratamos como
+        # "no existe" en vez de confiar ciegamente en el status code.
+        content_type = (response.headers.get("Content-Type") or "").lower()
+        if "html" in content_type:
+            return False
+        content_length = response.headers.get("Content-Length")
+        if content_length is not None and content_length.isdigit() and int(content_length) < CONTENT_LENGTH_MINIMO:
+            return False
+        return True
     except Exception:
         return None
 
 
 def bootstrap_fecha(codigo, meses_atras=BOOTSTRAP_MESES_ATRAS):
     """Para una fila nueva sin fecha conocida: prueba mes por mes hacia atrás
-    desde hoy hasta encontrar el archivo más reciente que sí existe."""
+    desde hoy hasta encontrar el archivo más reciente que sí existe. Nunca
+    prueba el mes en curso si todavía no cerró (ver periodo_cerrado)."""
     hoy = datetime.now(timezone('America/Lima'))
     anio, mes = hoy.year, hoy.month
     for _ in range(meses_atras):
-        if verificar_archivo_codigo(anio, mes, codigo):
+        if periodo_cerrado(anio, mes) and verificar_archivo_codigo(anio, mes, codigo):
             dia_final = monthrange(anio, mes)[1]
             return f"{dia_final:02d}/{mes:02d}/{anio}"
         mes -= 1
@@ -370,6 +402,17 @@ def revisar_bloque(sheet, bases_del_bloque):
             anio, mes = obtener_mes_siguiente(fecha_actual)
             if not anio:
                 continue
+
+            if not periodo_cerrado(anio, mes):
+                # El mes siguiente todavía está en curso -- no tiene sentido
+                # ni siquiera preguntarle al servidor, la SBS no puede haber
+                # publicado un periodo que no cerró. Esta es la guardia que
+                # evita que fechas "conocidas" salten al futuro por un
+                # falso positivo del servidor (soft 404).
+                mes_nombre_log, _ = MESES[mes]
+                print(f"  ⏱️ {base}/{familia}: {mes_nombre_log} {anio} aún no cierra, se omite")
+                continue
+
             revisados.add(key)
             existe = verificar_archivo_codigo(anio, mes, codigo)
             mes_nombre, mes_abr = MESES[mes]
